@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PixelMode {
+  DEV
+  PRODUCTION
+}
+
+model Pixel {
+  id        String       @id @default(uuid())
+  name      String
+  slug      String       @unique
+  mode      PixelMode    @default(DEV)
+  views     Int          @default(0)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  events    PixelEvent[]
+}
+
+model PixelEvent {
+  id        String   @id @default(uuid())
+  pixelId   String
+  pixel     Pixel    @relation(fields: [pixelId], references: [id], onDelete: Cascade)
+  ip        String?
+  userAgent String?
+  referer   String?
+  createdAt DateTime @default(now())
+}
+
+enum ClientStage {
+  PROSPECTO
+  CONTACTADO
+  NEGOCIACION
+  EN_IMPLEMENTACION
+  IMPLEMENTADA
+  INACTIVA
+}
+
+enum ContactKind {
+  RESPONSIBLE
+  CONTACT
+  OTHER
+}
+
+enum AttributeType {
+  TEXT
+  NUMBER
+  BOOLEAN
+  DATE
+  URL
+}
+
+model Client {
+  id               String          @id @default(uuid())
+  tenantId         String?         @unique
+  tenantCode       String?
+  name             String
+  stage            ClientStage     @default(PROSPECTO)
+  responsibleName  String?
+  responsibleEmail String?
+  responsiblePhone String?
+  contactName      String?
+  contactEmail     String?
+  contactPhone     String?
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  comments         ClientComment[]
+  contacts         ClientContact[]
+  attributes       ClientAttribute[]
+
+  @@index([stage])
+  @@index([tenantCode])
+}
+
+model ClientAttribute {
+  id        String        @id @default(uuid())
+  clientId  String
+  client    Client        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  key       String
+  value     String
+  type      AttributeType @default(TEXT)
+  position  Int           @default(0)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([clientId, key])
+  @@index([clientId])
+}
+
+model ClientContact {
+  id        String      @id @default(uuid())
+  clientId  String
+  client    Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  kind      ContactKind @default(CONTACT)
+  name      String
+  role      String?
+  email     String?
+  phone     String?
+  notes     String?
+  isPrimary Boolean     @default(false)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([clientId])
+  @@index([kind])
+}
+
+model ClientComment {
+  id        String   @id @default(uuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  author    String?
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([clientId])
+}
