@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { Request, Response } from 'express';
 import { PixelsService } from './pixels.service';
-import { AuthGuard } from '../auth/auth.guard';
+import { SuperadminGuard } from '../auth/auth.guard';
 import { PixelMode } from '@prisma/client';
 
 // 1x1 transparent GIF
@@ -19,14 +19,14 @@ export class PixelsController {
   constructor(private readonly pixelsService: PixelsService) {}
 
   @Get()
-  @UseGuards(AuthGuard)
+  @UseGuards(SuperadminGuard)
   async findAll(@Query('mode') mode?: string) {
     const pixelMode = mode === 'PRODUCTION' ? PixelMode.PRODUCTION : mode === 'DEV' ? PixelMode.DEV : undefined;
     return this.pixelsService.findAll(pixelMode);
   }
 
   @Post()
-  @UseGuards(AuthGuard)
+  @UseGuards(SuperadminGuard)
   async create(@Body() body: { name: string; mode?: string }) {
     if (!body.name) {
       throw new HttpException('name es requerido', HttpStatus.BAD_REQUEST);
@@ -43,7 +43,7 @@ export class PixelsController {
   }
 
   @Delete(':id')
-  @UseGuards(AuthGuard)
+  @UseGuards(SuperadminGuard)
   async delete(@Param('id') id: string) {
     try {
       await this.pixelsService.delete(id);
@@ -76,7 +76,7 @@ export class PixelsController {
   }
 
   @Get(':id/stats')
-  @UseGuards(AuthGuard)
+  @UseGuards(SuperadminGuard)
   async getStats(@Param('id') id: string) {
     const stats = await this.pixelsService.getStats(id);
     if (!stats) {

@@ -10,7 +10,7 @@ import {
   Put,
   UseGuards,
 } from '@nestjs/common';
-import { AuthGuard } from '../auth/auth.guard';
+import { SuperadminGuard } from '../auth/auth.guard';
 import {
   BillingCycle,
   SubscriptionStatus,
@@ -51,7 +51,7 @@ interface UpdateSubDto {
 }
 
 @Controller()
-@UseGuards(AuthGuard)
+@UseGuards(SuperadminGuard)
 export class SubscriptionsController {
   constructor(private readonly svc: SubscriptionsService) {}
 

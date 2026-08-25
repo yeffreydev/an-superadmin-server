@@ -8,10 +8,10 @@ import {
   ContactInput, ContactUpdateInput,
   AttributeInput, AttributeUpdateInput,
 } from './clients.service';
-import { AuthGuard } from '../auth/auth.guard';
+import { SuperadminGuard } from '../auth/auth.guard';
 
 @Controller('clients')
-@UseGuards(AuthGuard)
+@UseGuards(SuperadminGuard)
 export class ClientsController {
   constructor(private readonly clients: ClientsService) {}
 

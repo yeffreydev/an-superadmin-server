@@ -3,10 +3,10 @@ import {
   HttpException, HttpStatus,
 } from '@nestjs/common';
 import { AppDataService } from './app-data.service';
-import { AuthGuard } from '../auth/auth.guard';
+import { SuperadminGuard } from '../auth/auth.guard';
 
 @Controller('app')
-@UseGuards(AuthGuard)
+@UseGuards(SuperadminGuard)
 export class AppDataController {
   constructor(private readonly appDataService: AppDataService) {}
 

@@ -242,19 +242,40 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
     return enriched;
   }
 
-  async getUnicaById(idOrCode: string) {
-    // 1. resolve the tenants row by id OR code
-    const tenantRow = await this.acasPool.query(
+  /**
+   * Finds the ACAS tenants row from an AppUnica id, which may be a tenant
+   * UUID, a tenant code, or a QIPI Unica.id (what the list exposes when the
+   * ACA is registered in the app). QIPI Unica.tenantId holds the tenant code.
+   */
+  private async findTenantRow(idOrCode: string) {
+    const direct = await this.acasPool.query(
       `SELECT id, code, name, active, "createdAt", "updatedAt"
          FROM tenants WHERE id::text = $1 OR code = $1 LIMIT 1`,
       [idOrCode],
     );
-    const tenant = tenantRow.rows[0] ?? null;
+    if (direct.rows[0]) return direct.rows[0];
+    const qipi = await this.pool.query(
+      'SELECT "tenantId" FROM "Unica" WHERE id::text = $1 LIMIT 1',
+      [idOrCode],
+    );
+    const code = qipi.rows[0]?.tenantId;
+    if (!code) return null;
+    const byCode = await this.acasPool.query(
+      `SELECT id, code, name, active, "createdAt", "updatedAt"
+         FROM tenants WHERE code = $1 LIMIT 1`,
+      [code],
+    );
+    return byCode.rows[0] ?? null;
+  }
+
+  async getUnicaById(idOrCode: string) {
+    // 1. resolve the tenants row (tenant id, code, or QIPI Unica.id)
+    const tenant = await this.findTenantRow(idOrCode);
     if (!tenant) return null;
 
     // 2. QIPI side
     const unicaResult = await this.pool.query(
-      'SELECT * FROM "Unica" WHERE id = $1 OR "tenantId" = $2 LIMIT 1',
+      'SELECT * FROM "Unica" WHERE id::text = $1 OR "tenantId" = $2 LIMIT 1',
       [idOrCode, tenant.code],
     );
     const unica = unicaResult.rows[0] ?? null;
@@ -294,7 +315,7 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
 
   async getForumMessages(unicaIdOrCode: string) {
     const unicaRes = await this.pool.query(
-      `SELECT id FROM "Unica" WHERE id = $1 OR "tenantId" = $1 LIMIT 1`,
+      `SELECT id FROM "Unica" WHERE id::text = $1 OR "tenantId" = $1 LIMIT 1`,
       [unicaIdOrCode],
     );
     if (unicaRes.rows.length === 0) return [];
@@ -317,14 +338,10 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
    * ACAS tenant UUID/code and the QIPI Unica.id (null if not registered in app).
    */
   private async resolveTenant(idOrCode: string) {
-    const t = await this.acasPool.query(
-      `SELECT id, code FROM tenants WHERE id::text = $1 OR code = $1 LIMIT 1`,
-      [idOrCode],
-    );
-    const tenant = t.rows[0] ?? null;
+    const tenant = await this.findTenantRow(idOrCode);
     if (!tenant) return null;
     const u = await this.pool.query(
-      `SELECT id FROM "Unica" WHERE id = $1 OR "tenantId" = $2 LIMIT 1`,
+      `SELECT id FROM "Unica" WHERE id::text = $1 OR "tenantId" = $2 LIMIT 1`,
       [idOrCode, tenant.code],
     );
     return {

@@ -13,10 +13,10 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import { TenantsService } from './tenants.service';
-import { AuthGuard } from '../auth/auth.guard';
+import { SuperadminGuard } from '../auth/auth.guard';
 
 @Controller('tenants')
-@UseGuards(AuthGuard)
+@UseGuards(SuperadminGuard)
 export class TenantsController {
   constructor(private readonly tenantsService: TenantsService) {}
 

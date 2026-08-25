@@ -122,3 +122,51 @@ model ClientComment {
 
   @@index([clientId])
 }
+
+// ---------------------------------------------------------------------------
+// Panel accounts.
+//
+// The panel is now two things in one app: any creator can sign up (email or
+// Google) and manage the associations they create, while the single account
+// whose email matches SUPERADMIN_EMAIL also gets the superadmin area behind a
+// second password (see auth.service.ts).
+// ---------------------------------------------------------------------------
+
+enum AdminRole {
+  ADMIN
+  SUPERADMIN
+}
+
+model AdminUser {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  name         String?
+  avatar       String?
+  // Null when the account was created through Google and never set a password.
+  passwordHash String?
+  googleId     String?       @unique
+  role         AdminRole     @default(ADMIN)
+  active       Boolean       @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  associations Association[]
+
+  @@index([role])
+}
+
+// Ownership link between a panel account and a tenant (association) living in
+// the ACAS database. Kept here so the ACAS schema stays untouched.
+model Association {
+  id         String    @id @default(uuid())
+  tenantId   String    @unique
+  tenantCode String
+  name       String?
+  ownerId    String
+  owner      AdminUser @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([ownerId])
+  @@index([tenantCode])
+}
