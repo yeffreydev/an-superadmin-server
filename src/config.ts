@@ -22,6 +22,7 @@ export const appConfig = {
   SUPERADMIN_UNLOCK_TTL: process.env.SUPERADMIN_UNLOCK_TTL || '2h',
   // Google OAuth client id (the same one the frontend renders the button with).
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
   // Set to 'true' to stop new self-service signups.
   SIGNUP_DISABLED: process.env.SIGNUP_DISABLED === 'true',
   // A tenant `code` is the hostname the association is served on (see
