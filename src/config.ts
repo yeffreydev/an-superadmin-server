@@ -40,6 +40,10 @@ export const appConfig = {
   // table plus every row-level-multitenant table for the unicas system.
   ACAS_DATABASE_URL:
     process.env.ACAS_DATABASE_URL || process.env.MASTER_DATABASE_URL,
+  // JWT_SECRET of `server` (the unicas API). Lets the superadmin operate an
+  // association's income/expense module by signing short-lived tokens as its
+  // administrator (see finance/finance.service.ts).
+  ACAS_JWT_SECRET: process.env.ACAS_JWT_SECRET || '',
   QIPI_DATABASE_URL: process.env.QIPI_DATABASE_URL,
   // Base URL of qipi-server-nest's HTTP API (not the DB). Used to register a
   // newly created tenant as a "Unica" there so app invitations can flow.
