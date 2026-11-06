@@ -1,13 +1,17 @@
 import {
-  Controller, Get, Post, Delete, Param, Body, UseGuards,
-  HttpException, HttpStatus,
+  Controller, Get, Post, Patch, Put, Delete, Param, Body, UseGuards,
+  HttpException, HttpStatus, Logger,
 } from '@nestjs/common';
-import { AppDataService } from './app-data.service';
+import { AppDataService, UpdateAppUserInput } from './app-data.service';
 import { SuperadminGuard } from '../auth/auth.guard';
+import { CurrentUser } from '../auth/current-user.decorator';
+import { AuthUser } from '../auth/auth.types';
 
 @Controller('app')
 @UseGuards(SuperadminGuard)
 export class AppDataController {
+  private readonly logger = new Logger(AppDataController.name);
+
   constructor(private readonly appDataService: AppDataService) {}
 
   @Get('users')
@@ -22,6 +26,30 @@ export class AppDataController {
       throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
     }
     return user;
+  }
+
+  @Patch('users/:id')
+  async updateUser(
+    @Param('id') id: string,
+    @Body() body: UpdateAppUserInput,
+    @CurrentUser() admin: AuthUser,
+  ) {
+    const user = await this.appDataService.updateUser(id, body);
+    this.logger.log(
+      `Superadmin ${admin.email} edited app user ${id}: ${Object.keys(body ?? {}).join(', ')}`,
+    );
+    return user;
+  }
+
+  @Put('users/:id/password')
+  async setPassword(
+    @Param('id') id: string,
+    @Body() body: { password?: string },
+    @CurrentUser() admin: AuthUser,
+  ) {
+    const result = await this.appDataService.setUserPassword(id, body?.password);
+    this.logger.log(`Superadmin ${admin.email} changed password of app user ${id}`);
+    return result;
   }
 
   @Delete('users/:id')

@@ -3,8 +3,49 @@ import {
   HttpException, HttpStatus,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import * as bcrypt from 'bcryptjs';
 import { Pool } from 'pg';
 import { appConfig } from '../config';
+
+/**
+ * Columns of "AppUser" safe to send to the panel. The bcrypt hash never leaves
+ * the server; `hasPassword` tells whether the account has one (Google-only
+ * accounts don't).
+ */
+const APP_USER_PUBLIC_COLUMNS = `
+  au.id, au.dni, au.name, au.lastname, au.phone, au.email,
+  au."emailVerifiedAt", (au."googleId" IS NOT NULL) AS "hasGoogle",
+  au.avatar, au.currency, au."createdAt", au."updatedAt",
+  (au.password IS NOT NULL) AS "hasPassword"`;
+
+/** Same list as an-app-server/src/common/currency.ts. */
+const SUPPORTED_CURRENCIES = ['PEN', 'USD', 'BRL', 'MXN', 'CLP', 'ARS', 'CRC'];
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_BYTES = 72; // bcrypt ignores bytes beyond 72
+const BCRYPT_ROUNDS = 10; // matches an-app-server SALT_ROUNDS default
+
+export interface UpdateAppUserInput {
+  name?: string;
+  lastname?: string;
+  dni?: string;
+  phone?: string | null;
+  email?: string | null;
+  emailVerified?: boolean;
+  currency?: string;
+}
+
+const bad = (message: string) =>
+  new HttpException(message, HttpStatus.BAD_REQUEST);
+const conflict = (message: string) =>
+  new HttpException(message, HttpStatus.CONFLICT);
+
+/** Digits only, without 00 prefix. Same rule as an-app-server. */
+function normalizePhone(raw?: string | null): string | null {
+  let digits = (raw || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  return digits || null;
+}
 
 interface PlanInfo {
   id: string;
@@ -38,7 +79,7 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
 
   async getUsers() {
     const result = await this.pool.query(`
-      SELECT au.*,
+      SELECT ${APP_USER_PUBLIC_COLUMNS},
         json_agg(
           json_build_object('id', u.id, 'name', u.name)
         ) FILTER (WHERE u.id IS NOT NULL) as unicas
@@ -53,7 +94,7 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
 
   async getUserById(id: string) {
     const userResult = await this.pool.query(
-      'SELECT * FROM "AppUser" WHERE id = $1',
+      `SELECT ${APP_USER_PUBLIC_COLUMNS} FROM "AppUser" au WHERE au.id = $1`,
       [id],
     );
     if (userResult.rows.length === 0) return null;
@@ -66,6 +107,172 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
     );
 
     return { ...userResult.rows[0], unicas: unicasResult.rows };
+  }
+
+  /**
+   * Edits an app user's profile from the superadmin. Mirrors an-app-server
+   * rules (normalized DNI/email/phone, one account per DNI/email/phone) so the
+   * app keeps working after the edit.
+   */
+  async updateUser(id: string, input: UpdateAppUserInput) {
+    if (!input || typeof input !== 'object') throw bad('Datos inválidos');
+
+    const cur = await this.pool.query(
+      'SELECT id, dni, email, phone, "emailVerifiedAt" FROM "AppUser" WHERE id = $1',
+      [id],
+    );
+    const current = cur.rows[0];
+    if (!current) {
+      throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
+    }
+
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    const set = (column: string, value: unknown) => {
+      values.push(value);
+      sets.push(`"${column}" = $${values.length}`);
+    };
+
+    if (input.name !== undefined) {
+      const name = String(input.name ?? '').trim();
+      if (!name) throw bad('El nombre es requerido');
+      if (name.length > 100) throw bad('Nombre demasiado largo');
+      set('name', name);
+    }
+
+    if (input.lastname !== undefined) {
+      const lastname = String(input.lastname ?? '').trim();
+      if (lastname.length > 100) throw bad('Apellido demasiado largo');
+      set('lastname', lastname);
+    }
+
+    if (input.dni !== undefined) {
+      const dni = String(input.dni ?? '').replace(/\D/g, '');
+      if (dni.length < 6 || dni.length > 15) throw bad('DNI inválido');
+      if (dni !== current.dni) {
+        const dup = await this.pool.query(
+          'SELECT 1 FROM "AppUser" WHERE dni = $1 AND id <> $2 LIMIT 1',
+          [dni, id],
+        );
+        if (dup.rows.length) throw conflict('Ya existe otra cuenta con este DNI');
+        set('dni', dni);
+      }
+    }
+
+    // Email + verification flag.
+    let emailVerifiedHandled = false;
+    if (input.email !== undefined) {
+      const email = String(input.email ?? '').trim().toLowerCase() || null;
+      if (email && (email.length > 254 || !EMAIL_RE.test(email))) {
+        throw bad('Correo inválido');
+      }
+      if (email !== current.email) {
+        if (email) {
+          const dup = await this.pool.query(
+            'SELECT 1 FROM "AppUser" WHERE email = $1 AND id <> $2 LIMIT 1',
+            [email, id],
+          );
+          if (dup.rows.length) throw conflict('Ya existe otra cuenta con este correo');
+        }
+        set('email', email);
+        // A new address counts as verified only if the superadmin says so.
+        set('emailVerifiedAt', email && input.emailVerified ? new Date() : null);
+        emailVerifiedHandled = true;
+      }
+    }
+    if (!emailVerifiedHandled && input.emailVerified !== undefined && current.email) {
+      const verified = !!current.emailVerifiedAt;
+      if (!!input.emailVerified !== verified) {
+        set('emailVerifiedAt', input.emailVerified ? new Date() : null);
+      }
+    }
+
+    if (input.phone !== undefined) {
+      const phone = normalizePhone(input.phone);
+      if (phone && (phone.length < 6 || phone.length > 15)) {
+        throw bad('Teléfono inválido');
+      }
+      if (phone !== normalizePhone(current.phone)) {
+        if (phone) {
+          const tail = phone.slice(-9);
+          const candidates = await this.pool.query(
+            `SELECT phone FROM "AppUser" WHERE id <> $1 AND phone LIKE $2`,
+            [id, `%${tail}%`],
+          );
+          const taken = candidates.rows.some(
+            (r: { phone: string | null }) => normalizePhone(r.phone) === phone,
+          );
+          if (taken) throw conflict('Ya existe otra cuenta con este teléfono');
+        }
+        set('phone', phone);
+      }
+    }
+
+    if (input.currency !== undefined) {
+      const currency = String(input.currency ?? '').trim().toUpperCase();
+      if (!SUPPORTED_CURRENCIES.includes(currency)) throw bad('Moneda no soportada');
+      set('currency', currency);
+    }
+
+    if (sets.length > 0) {
+      set('updatedAt', new Date());
+      values.push(id);
+      try {
+        await this.pool.query(
+          `UPDATE "AppUser" SET ${sets.join(', ')} WHERE id = $${values.length}`,
+          values,
+        );
+      } catch (e: any) {
+        if (e?.code === '23505') throw conflict('Dato duplicado en otra cuenta');
+        throw e;
+      }
+    }
+
+    return this.getUserById(id);
+  }
+
+  /**
+   * Sets a new password for an app user. Stored as a bcrypt hash compatible
+   * with an-app-server login. Pending reset codes are invalidated so an old
+   * code can't override it.
+   */
+  async setUserPassword(id: string, password: unknown) {
+    if (typeof password !== 'string' || !password) throw bad('Contraseña requerida');
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      throw bad(`La contraseña debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`);
+    }
+    if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+      throw bad('La contraseña es demasiado larga');
+    }
+    if (password.trim() !== password) {
+      throw bad('La contraseña no puede empezar ni terminar con espacios');
+    }
+
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const r = await client.query(
+        'UPDATE "AppUser" SET password = $1, "updatedAt" = NOW() WHERE id = $2',
+        [hash, id],
+      );
+      if ((r.rowCount ?? 0) === 0) {
+        await client.query('ROLLBACK');
+        throw new HttpException('Usuario no encontrado', HttpStatus.NOT_FOUND);
+      }
+      await client.query(
+        `UPDATE "PasswordReset" SET "usedAt" = NOW()
+          WHERE "appUserId" = $1 AND "usedAt" IS NULL`,
+        [id],
+      );
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      client.release();
+    }
+    return { success: true };
   }
 
   async deleteUser(id: string): Promise<boolean> {
@@ -282,7 +489,7 @@ export class AppDataService implements OnModuleInit, OnModuleDestroy {
 
     const usersResult = unica
       ? await this.pool.query(
-          `SELECT au.* FROM "AppUser" au
+          `SELECT ${APP_USER_PUBLIC_COLUMNS} FROM "AppUser" au
            JOIN "UserUnica" uu ON au.id = uu."appUserId"
            WHERE uu."unicaId" = $1`,
           [unica.id],
